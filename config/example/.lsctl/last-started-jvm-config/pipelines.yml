@@ -1,0 +1,5 @@
+
+#
+- pipeline.id: reconcile1.0
+  path.config: "/home/docker/pipelines/config/reconcile/{input_reconcile,output_reconcile,filter_reconcile}.cfg"
+#

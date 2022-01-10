@@ -1,0 +1,16 @@
+[2021-11-08T23:28:09,488][INFO ][logstash.runner          ] Log4j configuration path used is: /home/pipelines/lsctl/config/example/log4j2.properties
+[2021-11-08T23:28:09,495][WARN ][logstash.runner          ] Logging configuration uses appender or filter with scripting language JavaScript, which will be removed in a future major release of Logstash.
+[2021-11-08T23:28:09,498][INFO ][logstash.runner          ] Starting Logstash {"logstash.version"=>"7.15.1", "jruby.version"=>"jruby 9.2.19.0 (2.5.8) 2021-06-15 55810c552b Java HotSpot(TM) 64-Bit Server VM 25.311-b11 on 1.8.0_311-b11 +indy +jit [linux-aarch64]"}
+[2021-11-08T23:28:09,536][INFO ][logstash.setting.writabledirectory] Creating directory {:setting=>"path.queue", :path=>"/home/pipelines/lsctl/data/example/queue"}
+[2021-11-08T23:28:09,537][INFO ][logstash.setting.writabledirectory] Creating directory {:setting=>"path.dead_letter_queue", :path=>"/home/pipelines/lsctl/data/example/dead_letter_queue"}
+[2021-11-08T23:28:09,873][WARN ][logstash.config.source.multilocal] Ignoring the 'pipelines.yml' file because modules or command line options are specified
+[2021-11-08T23:28:09,903][INFO ][logstash.agent           ] No persistent UUID file found. Generating new UUID {:uuid=>"f64626f8-bc47-4d28-93c3-3ecfdc286035", :path=>"/home/pipelines/lsctl/data/example/uuid"}
+[2021-11-08T23:28:11,864][INFO ][logstash.agent           ] Successfully started Logstash API endpoint {:port=>9600}
+[2021-11-08T23:28:12,406][INFO ][org.reflections.Reflections] Reflections took 105 ms to scan 1 urls, producing 120 keys and 417 values 
+[2021-11-08T23:28:14,041][INFO ][logstash.javapipeline    ][main] Starting pipeline {:pipeline_id=>"main", "pipeline.workers"=>2, "pipeline.batch.size"=>125, "pipeline.batch.delay"=>50, "pipeline.max_inflight"=>250, "pipeline.sources"=>["/home/pipelines/lsctl/config/example/example.conf"], :thread=>"#<Thread:0x7f4d1af0 run>"}
+[2021-11-08T23:28:14,855][INFO ][logstash.javapipeline    ][main] Pipeline Java execution initialization time {"seconds"=>0.8}
+[2021-11-08T23:28:15,061][INFO ][logstash.javapipeline    ][main] Pipeline started {"pipeline.id"=>"main"}
+[2021-11-08T23:28:15,161][INFO ][logstash.agent           ] Pipelines running {:count=>1, :running_pipelines=>[:main], :non_running_pipelines=>[]}
+[2021-11-08T23:28:15,396][INFO ][logstash.javapipeline    ][main] Pipeline terminated {"pipeline.id"=>"main"}
+[2021-11-08T23:28:15,724][INFO ][logstash.pipelinesregistry] Removed pipeline from registry successfully {:pipeline_id=>:main}
+[2021-11-08T23:28:15,769][INFO ][logstash.runner          ] Logstash shut down.

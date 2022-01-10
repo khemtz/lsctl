@@ -1,0 +1,578 @@
+#!/bin/bash
+
+########################################################
+####### PARSE COMMAND-LINE ARGUMENTS ###################
+########################################################
+ARG_OPTION=$1
+ARG_UJVM=$2
+ARG_SETTING=$3
+
+export JAVA_HOME="/usr/java/jre"
+
+if [ -z "$ARG_OPTION" ]
+then
+  ARG_OPTION="status"
+fi
+
+if [ -z "$ARG_UJVM" ]
+  then
+    nothing=""
+  else
+    ujvm=$ARG_UJVM
+fi
+
+if [[ -d "/opt/logstash/" ]]; then
+  LS_ROOT="/home/pipelines/lsctl"
+else
+  LS_ROOT="/home/pipelines/lsctl"
+fi
+
+export LS_CURRENT_VERSION_PATH=$(readlink -f $LS_ROOT/current)
+export LS_CURRENT_VERSION=$(perl -le 'print "$1" if ($ENV{LS_CURRENT_VERSION_PATH} =~ /(\d+\.\d+\.\d+)/)')
+export LS_CONF="$LS_ROOT/config"
+export LS_LOGS="$LS_ROOT/logs"
+export LS_DATA="$LS_ROOT/data"
+export LSCTL_OUTPUT_FILE="${LS_LOGS}/${ujvm}/$(date +'%Y%m%d-%H%M%S').output"
+
+LSCTLDIR=""
+LSCTL_LAST_CONFIG=""
+LSCTL_OUTPUT_OVERRIDE=""
+LSCTL_OUTPUT_INFO="..."
+
+# Define terminal colors
+YLW=$'\033[0;33m'
+GRN=$'\033[0;32m'
+RED=$'\033[0;31m'
+CYAN=$'\033[0;36m'
+BLUE=$'\033[0;34m'
+NC=$'\033[0m' # No Color
+
+# Print banner to terminal
+echo ""
+echo "################################################################################"
+echo "###              Operational Systems Support - Logstash Control (lsctl)      ###"
+echo "###                 Updated: 2020-05-12     Version: 1.00                    ###"
+echo "################################################################################"
+echo ""
+
+lsctl_usage() {
+  USAGE="Usage: ${0##*/} [OPTION] [JVM]"
+  LONGHELP=0
+  if [[ "$1" = "longhelp"  ]]; then
+    LONGHELP=1
+  fi
+  echo -ne "$USAGE\n\n"
+  echo -ne "Options:\n"
+  echo -ne "\n--Single JVM options. [JVM] must be specified on command-line\n\n"
+  FORMAT="%-17s %-62s\n"
+  printf "$FORMAT" "start"             "Start the selected JVM"
+  printf "$FORMAT" "stop"              "Stop the selected JVM gracefully (no force kill)"
+  printf "$FORMAT" "restart"           "Stop and then start the selected JVM"
+  printf "$FORMAT" "enable"            "Allows the JVM to be started by ${0##*/}"
+  printf "$FORMAT" "disable"           "Disallow the JVM to be started by ${0##*/}"
+  printf "$FORMAT" "cfgdiff"           "Shows a diff of the current config on disk vs. the last known"
+  printf "$FORMAT" " "                 "config that the JVM was started with."
+  printf "$FORMAT" "setver"            "Set the version of Logstash to be used when starting the JVM."
+  printf "$FORMAT" " "                 "Must be an installed version. Format: current or X.x.x"
+  printf "$FORMAT" "start_stdout"       "Start the selected JVM with pipeline events stdout->file"
+  echo -ne "\n--Batch JVM options.\n\n"
+  printf "$FORMAT" "status"            "Prints status of all JVMs (default behavior)"
+  printf "$FORMAT" "startall"          "Start all JVMs which are enabled and not currently running"
+  printf "$FORMAT" "stopall"           "Stop all JVMs which are enabled and currently running"
+  printf "$FORMAT" "restartall"        "Perform a Stop & Start on each JVM in sequence"
+  echo ""
+}
+
+########################################################
+####### DEFINE SUBROUTINES #############################
+########################################################
+ls_start() {
+  export LSCTL_JVM_CONFIG_DIR="$LS_CONF/$ujvm"
+  export LSCTL_UJVM=$ujvm
+  if isJVMDisabled $ujvm; then
+    jvmecho "${YLW}This JVM is currently set to DISABLED and will not be started.\n${NC}"
+#    jvmecho "${YLW}To enable, use 'lsctl enable $ujvm'\n${NC}"
+    return
+  fi
+  if ps ww -C java o pid,args | grep "$ujvm" > /dev/null
+  then
+    jvmecho "This JVM is already running. PID($(ps ww -C java o pid,args | grep "$ujvm" | awk '{print $1}'))\n"
+  else
+    if [[ -f "$LS_CONF/$ujvm/$ujvm.conf" ]] ||  isJVMUsingPipelines "$ujvm"
+    then
+      if [ -z "$LS_JVM_OPTS" ]; then
+        for jvm_options in "$LS_CONF/$ujvm/jvm.options"; do
+          if [ -r "$jvm_options" ]; then
+            LS_JVM_OPTS=$jvm_options
+            break
+          fi
+        done
+      fi
+      initlsctldir $ujvm
+      mkdir -p $LS_LOGS/$ujvm 2>/dev/null
+      # Determine if -f should be used for single pipeline or empty for multiple pipelines
+      if isJVMUsingPipelines $ujvm; then
+        # use pipelines.yml
+        UJVM_CONF_ARG=""
+        UJVM_CONF=""
+      else
+        # use the .conf file
+        UJVM_CONF_ARG="-f"
+        UJVM_CONF="$LS_CONF/$ujvm/$ujvm.conf"
+
+      fi
+      # jvmecho "nohup $LS_HOME/bin/logstash -f $LS_CONF/$ujvm/$ujvm.conf --path.settings $LS_CONF/$ujvm/ $LSCTL_OUTPUT_ARG $LSCTL_OUTPUT_OVERRIDE >/dev/null 2>&1 &\n"
+      jvmecho "Starting JVM ${LSCTL_OUTPUT_INFO}"
+      if [ -z "$LSCTL_OUTPUT_OVERRIDE" ]; then
+        nohup "$LS_HOME/bin/logstash" $UJVM_CONF_ARG $UJVM_CONF --path.settings "$LS_CONF/$ujvm/" --path.logs "$LS_LOGS/$ujvm"  --path.data "$LS_DATA/$ujvm" > /dev/null 2>&1 &
+        echo ""
+        jvmecho "aqui->$LS_HOME/bin/logstash $UJVM_CONF_ARG $UJVM_CONF --path.settings $LS_CONF/$ujvm/ --path.logs $LS_LOGS/$ujvm  --path.data $LS_DATA/$ujvm"
+        echo ""
+      else
+        echo ""
+
+        jvmecho " * The logstash jvm logs will print to this terminal.\n"
+        jvmecho " * Be patient while the pipeline is started.\n"
+        jvmecho " * If you would like for output to be written to a file, add the\n";
+        jvmecho " * Use ${YLW}Ctrl+C${NC} to stop the JVM once enough events have been collected.\n"
+
+        "$LS_HOME/bin/logstash" $UJVM_CONF_ARG $UJVM_CONF --path.settings "$LS_CONF/$ujvm/"
+        #> ${LSCTL_OUTPUT_FILE}
+        if [ -f $LSCTL_OUTPUT_FILE ]; then
+          # Output file exists, inform user.
+          jvmecho "\n"
+          jvmecho "${YLW}The output file size is shown below.  Please remove or compress it when analysis is complete${NC}\n"
+          jvmecho "${YLW}Size   Filename${NC}\n"
+          jvmecho "${YLW}$(du -h $LSCTL_OUTPUT_FILE)${NC}\n"
+        else
+          jvmecho "\n"
+          jvmecho "Logstash did not create an output file\n"
+        fi
+        echo ""
+        exit 1
+      fi
+      mkdir -p "$LS_HOME/runtime/" 2>/dev/null
+      echo $! > "$LS_HOME/runtime/$ujvm.pid"
+      timeout_secs=90
+
+      jvmecho_cont " Waiting for pipeline to start (${timeout_secs}s) ..."
+      echo ""
+      echo "aqui -> timeout $timeout_secs tail -F -n0 $LS_LOGS/$ujvm/logstash-plain.log"
+      echo ""
+      (timeout $timeout_secs tail -F -n0 $LS_LOGS/$ujvm/logstash-plain.log 2>/dev/null | egrep -v "monitoring-logstash" & ) | egrep -q "Pipeline main started|Pipeline started successfully|Successfully started Logstash API endpoint"
+
+      if [[ $? -eq 1 ]]; then # If 1, then we timed out
+        jvmecho_cont " ${RED}ERROR!${NC}\n"
+        jvmecho "${RED} ! Timed out waiting for the main pipeline to start.\n${NC}"
+        jvmecho "${RED} ! Review the logs ($LS_LOGS/$ujvm/logstash-plain.log) to determine cause.\n${NC}"
+      else
+        jvmecho_cont " ${GRN}Done.${NC}\n"
+        # was last loaded when logstash was last started.
+        updateLastKnownConfig
+        # Tell user where the output file can be found.
+      fi
+      LS_JVM_OPTS=""
+    else
+      jvmecho "Can't find $ujvm in $LS_CONF/$ujvm/.\n"
+      jvmecho "Script is looking for $LS_CONF/$ujvm/$ujvm.conf or $LS_CONF/$ujvm/pipelines.yml\n"
+    fi
+  fi
+  RETVAL=$?
+}
+
+
+###
+ls_stop() {
+  pid=$(ps ww -C java o pid,args | grep "$ujvm" | awk '{print $1}')
+  if [ ! -z $pid ]
+  then
+    jvmecho "Stopping JVM ... "
+    kill "$pid" || true
+    rm "$LS_HOME/runtime/$ujvm.pid" 2>/dev/null
+    timeout_secs=60
+    jvmecho_cont "Waiting for JVM to stop (${timeout_secs}s) ... "
+    timeout $timeout_secs tail --pid=$pid -f /dev/null
+    RETVAL=$?
+    if [[ $RETVAL -eq 124 ]]; then
+      jvmecho_cont "${RED}ERROR!${NC}\n"
+      jvmecho "${RED} ! Timed out waiting for JVM to stop.\n${NC}"
+      jvmecho "${RED} ! The requested JVM did not stop within the expected time period (${timeout_secs}sec).\n${NC}"
+      jvmecho "${RED} ! This is normally caused by a JVM with an Input that is waiting on the port\n${NC}"
+      jvmecho "${RED} ! to close.  Monitor the log file to deterine cause:\n${NC}"
+      jvmecho "${RED} !   tail -f $LS_LOGS/$ujvm/logstash-plain.log\n${NC}"
+      jvmecho "${RED} ! A forced kill with kill -9 might be required.  kill -9 $pid\n${NC}"
+      return
+    else
+      jvmecho_cont "${GRN}Done.${NC}\n"
+      # Remove contents from LSCTL_LAST_CONFIG
+      # initlsctldir $ujvm
+      # rm -rf $LSCTL_LAST_CONFIG/*
+    fi
+  else
+    jvmecho "JVM is not running.\n"
+  fi
+  RETVAL=$?
+}
+
+
+
+###
+ls_enable() {
+  if isJVMDisabled $ujvm; then
+    initlsctldir $ujvm
+    rm "${LSCTLDIR}/DISABLED"
+    RETVAL=$?
+    jvmecho "This JVM has been Enabled.\n"
+  else
+    jvmecho "This JVM is already Enabled.\n"
+  fi
+}
+
+
+###
+ls_disable() {
+  if isJVMDisabled $ujvm; then
+    jvmecho "This JVM is already Disabled.\n"
+  else
+    initlsctldir $ujvm
+    touch "${LSCTLDIR}/DISABLED"
+    RETVAL=$?
+    jvmecho "This JVM has been Disabled.\n"
+  fi
+}
+
+
+###
+ls_restart() {
+  ls_stop;
+  ls_start;
+  RETVAL=$?
+}
+
+
+###
+ls_stopall() {
+  echo ""
+  echo "Stopping All JVMs"
+  for dir in $LS_CONF/*/
+  do
+    #build jvmname
+    jvmname=${dir%*/}
+    jvmname=${jvmname##*/}
+    jvmname=${jvmname%.conf}
+    ujvm=$jvmname
+    ls_stop;
+  done
+  echo ""
+  echo "Finished with 'stopall'.  If any JVMs failed to stop, inspect their logs and"
+  echo "then re-attempt with the 'stop' option."
+  echo ""
+  RETVAL=$?
+}
+
+
+###
+ls_startall() {
+  echo ""
+  echo Starting All JVMs
+  for dir in $LS_CONF/*/
+    do
+      #build jvmname
+      jvmname=${dir%*/}
+      jvmname=${jvmname##*/}
+      jvmname=${jvmname%.conf}
+      ujvm=$jvmname
+      ls_start;
+    done
+  echo ""
+  echo "Finished with 'startall'.  If any JVMs failed to start, inspect their logs and"
+  echo "then re-attempt with the 'start' option."
+  echo ""
+  RETVAL=$?
+}
+
+
+###
+ls_restartall() {
+  echo ""
+  echo "Restarting All JVMs"
+  echo ""
+  for dir in $LS_CONF/*/
+  do
+    #build jvmname
+    jvmname=${dir%*/}
+    jvmname=${jvmname##*/}
+    jvmname=${jvmname%.conf}
+    ujvm=$jvmname
+    echo "--------------------------------------------------------------------------------"
+    ls_stop;
+    ls_start;
+  done
+  echo "--------------------------------------------------------------------------------"
+  echo ""
+  echo "Finished with 'restartall'.  If any JVMs failed to restart, inspect their logs and"
+  echo "then re-attempt with the 'restart' option."
+  echo ""
+  RETVAL=$?
+}
+
+
+###
+ls_cfgdiff() {
+  initlsctldir $ujvm
+  diff -ur $LSCTL_LAST_CONFIG/ $LS_CONF/$ujvm/ | egrep -v "^Only in |^diff" 2>/dev/null
+}
+
+
+###
+ls_setver() {
+  initlsctldir $ujvm
+
+  if [ -z $ARG_SETTING ]; then
+    echo -ne "Please specify which version of Logstash to use for this JVM:\n\n"
+    echo "Setting the version to \"current\" will ensure that this JVM is upgraded"
+    echo "each time Logstash is upgrade on this node."
+    echo ""
+    echo " ${0##*/} setver $ujvm current"
+    echo ""
+    echo "Hard-coding the version will ensure that the JVM stays on the expected"
+    echo "Logstash version until updated manually."
+    echo ""
+    for dir in $LS_ROOT/logstash-*/
+    do
+      ls_installed_version=${dir%*/}
+      ls_installed_version=${ls_installed_version##*/}
+      echo " ${0##*/} setver $ujvm $ls_installed_version"
+    done
+    echo ""
+  else
+    if [[ ! -d "$LS_ROOT/$ARG_SETTING" ]]; then
+      echo -ne "${YLW}ERROR:  Invalid value '$ARG_SETTING'.  Can't find Logstash\n"
+      echo -ne "installation at $LS_ROOT/$ARG_SETTING.${NC}\n\n"
+      exit
+    else
+      if [[ -f "$LS_CONF/$ujvm/lsctl.conf" ]]; then
+        sed -i "s/LOGSTASH_VERSION=\"${LOGSTASH_VERSION}\"/LOGSTASH_VERSION=\"${ARG_SETTING}\"/" $LS_CONF/$ujvm/lsctl.conf
+      else
+        echo "LOGSTASH_VERSION=\"${ARG_SETTING}\"" >> $LS_CONF/$ujvm/lsctl.conf
+      fi
+      echo "The target Logstash version for $ujvm is now set to $ARG_SETTING."
+    fi
+  fi
+}
+
+
+###
+ls_status() {
+  # echo "################################################################################"
+  # echo This shows which jvms are running based on conf files found within the specified
+  # echo directory.  If a jvm has been started with a conf file outside of this directory
+  # echo then it will not be listed.
+  # echo "################################################################################"
+  count_disabled=0
+  proc_info=""
+  printf "\n%-29s %-11s %8s %5s %6s %15s\n" "JVM Name" "Status" "Cfg Diff" "LSVer" "PID" "Running Since"
+  for dir in $LS_CONF/*/
+  do
+    disabledText=""
+    jvmname=${dir%*/}
+    jvmname=${jvmname##*/}
+    jvmname=${jvmname%.conf}
+    ujvm=$jvmname
+
+    initlsctldir $ujvm
+    ls_target_version=$(perl -le 'print "$1" if ($ENV{LS_HOME} =~ /(\d+\.\d+\.\d+)/)')
+
+    cfgdiffstatus="All Good"
+    totaldifferences=0
+    for files in $LS_CONF/$ujvm/*
+    do
+      filepath=${files%*/##*}
+      cfgfile=$(basename ${filepath})
+      lastcfgfile=$LSCTL_LAST_CONFIG/$cfgfile
+      # jvmecho "cfgfile=$cfgfile\n"
+      numdifferences=$(sdiff -s $filepath $lastcfgfile 2>/dev/null | wc -l 2>/dev/null)
+      totaldifferences=$((totaldifferences+numdifferences))
+    done
+    if [[ $totaldifferences -ge 1 ]]; then
+      if [[ $totaldifferences -le 9 ]]; then
+        cfgdiffstatus="${YLW} ${totaldifferences} diffs${NC}"
+      else
+        cfgdiffstatus="${YLW}${totaldifferences} diffs${NC}"
+      fi
+    fi
+
+    if isJVMDisabled $ujvm; then
+      disabledText="${YLW}DISABLED${NC}"
+      count_disabled=$((count_disabled+1))
+    fi
+    if ps ww -C java o pid,lstart,args | grep "$ujvm" > /dev/null; then
+      export proc_info=$(ps ww -C java o pid,lstart,args | grep $ujvm 2> /dev/null)
+      # echo "[$proc_info]"
+      #ls_running_version=$(perl -le 'print "$1" if ($ENV{proc_info} =~ /\/logstash-([0-9\.]+?)\/vendor/)')
+      ls_running_version=$(perl -le 'print "$1" if ($ENV{proc_info} =~ /\s\/opt\/logstash\/logstash-([0-9\.]{5}?)/)')
+      if [[ "$ls_running_version" != "$ls_target_version" ]]; then
+        # JVM is running a version that is NOT equal to the version specified in lsctl.conf
+        ls_version_string=$(printf "${YLW}%5s${NC}" "$ls_running_version->$ls_target_version")
+      elif [[ "$ls_running_version" = "$LS_CURRENT_VERSION" ]]; then
+        # JVM is running the target version, AND the version is defined as the "current" version
+        ls_version_string=$(printf "${GRN}%5s${NC}" "$ls_running_version")
+      else
+        # JVM is running the target version (not the "current" version)
+       # Any JVM restarts will always restart to the target version.
+        ls_version_string=$(printf "${CYAN}%5s${NC}" "$ls_running_version")
+      fi
+      runnince_since="$(perl -le 'print "$1" if ($ENV{proc_info} =~ /^\s*\d+\s\w+\s(.{15})/)')"
+      pid=$(perl -le 'print $1 if ($ENV{proc_info} =~ /^\s*(\d+)/)')
+      printf "%-29s ${GRN}RUNNING${NC}     %8s %5s %6s %15s\n" "$ujvm" "$cfgdiffstatus" "$ls_version_string" "$pid" "$runnince_since"
+    else
+      if [[ "$ls_target_version" = "$LS_CURRENT_VERSION" ]]; then
+        # JVM's target version is equal to the current version, all good
+        ls_version_string=$(printf "${GRN}%5s${NC}" "$ls_target_version")
+      else
+        # JVM's target version is different from the current version, not bad, must be set this way manually
+        ls_version_string=$(printf "${CYAN}%5s${NC}" "$ls_target_version")
+      fi
+      printf "%-29s ${RED}NOT RUNNING${NC} %8s %5s %6s\n" "$ujvm" "${disabledText}" "$ls_version_string"
+    fi
+  done
+  echo ""
+  echo "Logstash configuration directory: $LS_CONF"
+  echo ""
+  # if [[ $count_disabled -ge 1 ]]; then
+    # printf "To remove the ${YLW}-DISABLED${NC} status for a JVM, remove the file named\n"
+    # printf "$LS_CONF/{JVM}/DISABLED from the JVM's config directory.\n"
+    # printf "At this time there is nothing special about this status, other than to \n"
+    # printf "indicate to OSS/ECM team members that the JVM is not expected to be \n"
+    # printf "inservice at this time.\n"
+    # printf "\n"
+  # fi
+  RETVAL=$?
+}
+
+
+# Check to see if this JVM is set as DISABLED
+# Input: $ujvm
+# Return: 1 if DISABLED
+#         0 if ENABLED
+isJVMDisabled() {
+  [ -f "$LS_CONF/$1/.lsctl/DISABLED" ]
+}
+
+
+isJVMUsingPipelines() {
+  [ -f "$LS_CONF/$1/pipelines.yml" ]
+}
+
+
+initlsctldir() {
+  setLSCTLDefaults
+
+  LSCTLDIR="$LS_CONF/$1/.lsctl";
+  mkdir -p $LSCTLDIR 2>/dev/null
+  LSCTL_LAST_CONFIG="$LSCTLDIR/last-started-jvm-config"
+  mkdir -p $LSCTL_LAST_CONFIG 2>/dev/null
+
+  # Load any per-JVM configuration variables here.
+  if [[ -f "$LS_CONF/$1/lsctl.conf" ]]; then
+    source "$LS_CONF/$1/lsctl.conf"
+  fi
+  if [[ -L "$LS_ROOT/$LOGSTASH_VERSION" ]]; then
+    export LS_HOME=$(readlink -f $LS_ROOT/$LOGSTASH_VERSION)
+  else
+    export LS_HOME="$LS_ROOT/$LOGSTASH_VERSION"
+  fi
+}
+
+
+setLSCTLDefaults() {
+  export LOGSTASH_VERSION="current"
+}
+# Custom print command for JVM-related messages
+
+
+jvmecho () {
+  echo -en "${ujvm}: " "$@"
+}
+
+
+jvmecho_cont () {
+  echo -en "$@"
+}
+
+
+updateLastKnownConfig() {
+  # jvmecho "Updating last known config with current configuration settings.\n"
+  # echo rsync -a --exclude=".*" --exclude="\\\${sys:ls.logs}" --delete --delete-excluded $LS_CONF/$ujvm/ $LSCTL_LAST_CONFIG
+  rsync -a --exclude=".*" --exclude="\\\${sys:ls.logs}" --delete --delete-excluded $LS_CONF/$ujvm/ $LSCTL_LAST_CONFIG
+}
+
+
+##########################################################################################
+##############  MENU / CASE STATEMENT ####################################################
+##########################################################################################
+# Set defaults for LSCTL
+setLSCTLDefaults
+
+case "$ARG_OPTION" in
+  start)
+    ls_start
+    ls_status
+    ;;
+  start_stdout)
+    initlsctldir $ujvm
+    LSCTL_OUTPUT_FILE="${LS_LOGS}/${ujvm}/console_$(date +'%Y%m%d-%H%M%S').output"
+    #LSCTL_OUTPUT_OVERRIDE="output { file { path => '${LSCTL_OUTPUT_FILE}' codec => json_lines } stdout { codec => dots } }"
+    LSCTL_OUTPUT_OVERRIDE="stdout"
+    LSCTL_OUTPUT_INFO="with stdout->file enabled ..."
+    ls_start
+    ls_status
+    ;;
+  stop)
+    ls_stop
+    ls_status
+    ;;
+  enable)
+    ls_enable
+    ls_status
+    ;;
+  disable)
+    ls_disable
+    ls_status
+    ;;
+  setver)
+    ls_setver
+   ;;
+  cfgdiff)
+    ls_cfgdiff
+    ;;
+  cfgsync)
+    initlsctldir $ujvm
+    updateLastKnownConfig
+    ;;
+  restart)
+    ls_restart
+    ls_status
+    ;;
+  stopall)
+    ls_stopall
+    ls_status
+    ;;
+  startall)
+    ls_startall
+    ls_status
+    ;;
+  restartall)
+    ls_restartall
+    ls_status
+    ;;
+  status)
+    ls_status
+    ;;
+  *)
+    lsctl_usage longhelp
+    exit 1
+esac
+echo ""
+exit $RETVAL
+
