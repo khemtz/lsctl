@@ -3,7 +3,7 @@
 ```
 [root@azh1e1srels02 home]# mkdir pipelines
 [root@azh1e1srels02 home]# cd pipelines/
-[root@azh1e1srels02 pipelines]# git clone https://gitlab.digitalcoedevops.com/labs/aiops/lsctl.git
+[root@azh1e1srels02 pipelines]# git clone https://github.com/khemtz/lsctl/lsctl.git
 Cloning into 'lsctl'...
 Username for 'https://gitlab.digitalcoedevops.com': cmartinez
 Password for 'https://cmartinez@gitlab.digitalcoedevops.com':
